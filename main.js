@@ -31,8 +31,7 @@ function parseInstallConfig(raw) {
         const separator = trimmed.indexOf('=');
         if (separator < 1) continue;
         const key = trimmed.slice(0, separator).trim();
-        const value = trimmed.slice(separator + 1).trim();
-        result[key] = value;
+        result[key] = trimmed.slice(separator + 1).trim();
     }
     return result;
 }
@@ -690,12 +689,12 @@ async function getScheduleFromCloudWithRetry(maxRetries = 10) {
         }
     }
     console.error('[Network] Failed to establish network connection after', maxRetries, 'attempts')
-    
+
     // 尝试从本地缓存加载课表数据（离线模式）
     if (offlineCache.hasCachedData()) {
         console.log('[Network] Loading schedule from local cache (offline mode)')
         const cachedData = offlineCache.loadFromCache()
-        if (cachedData && cachedData.data) {
+        if (cachedData?.data) {
             offlineCache.setOfflineStatus(true)
             if (win && !win.isDestroyed()) win.webContents.send('newConfig', cachedData.data)
             lastScheduleConfig = cachedData.data
@@ -703,7 +702,7 @@ async function getScheduleFromCloudWithRetry(maxRetries = 10) {
             return false
         }
     }
-    
+
     // 即使没有缓存数据，也继续尝试获取课表（可能在移动网络等不稳定情况下）
     console.log('[Network] No cached data available, proceeding with schedule fetch despite network check failure')
     getScheduleFromCloud()
@@ -899,10 +898,9 @@ ipcMain.handle('getCachedVersions', () => offlineCache.getCachedVersions())
 ipcMain.handle('getCacheStats', () => offlineCache.getCacheStats())
 ipcMain.handle('loadCachedSchedule', (e, version) => {
     const cachedData = offlineCache.loadFromCache(version)
-    if (cachedData && cachedData.data) {
-        return cachedData.data
+    if (cachedData?.data) {
+        return cachedData?.data || null
     }
-    return null
 })
 
 ipcMain.on('getWeekIndex', (e, arg) => {
