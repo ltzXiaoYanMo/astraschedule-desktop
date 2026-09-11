@@ -6,6 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app } = require('electron');
 
+// 只记录错误的类型信息，避免把缓存文件内容、用户目录路径等敏感数据写入日志
+function describeError(error) {
+    return error?.code || error?.name || 'unknown error';
+}
+
 class OfflineCache {
     constructor() {
         this.cacheDir = path.join(app.getPath('userData'), 'schedule-cache');
@@ -28,10 +33,33 @@ class OfflineCache {
     }
 
     /**
+     * 规范化版本号，仅允许 'latest' 或非负整数
+     */
+    normalizeVersion(version) {
+        if (version === 'latest') {
+            return 'latest';
+        }
+        const num = Number(version);
+        if (!Number.isInteger(num) || num < 0) {
+            throw new Error('Invalid cache version');
+        }
+        return String(num);
+    }
+
+    /**
      * 获取当前缓存文件路径
      */
     getCacheFilePath(version = 'latest') {
-        return path.join(this.cacheDir, `schedule-${version}.json`);
+        const safe = this.normalizeVersion(version);
+        const fileName = `schedule-${safe}.json`;
+        const cacheDir = path.resolve(this.cacheDir);
+        const filePath = path.resolve(cacheDir, fileName);
+
+        // 路径必须严格位于缓存目录内，防止目录穿越
+        if (path.dirname(filePath) !== cacheDir) {
+            throw new Error('Invalid cache path');
+        }
+        return filePath;
     }
 
     /**
@@ -69,7 +97,7 @@ class OfflineCache {
             console.log(`[OfflineCache] Saved schedule to cache: version ${version}`);
             return true;
         } catch (error) {
-            console.error('[OfflineCache] Failed to save cache:', error);
+            console.error('[OfflineCache] Failed to save cache:', describeError(error));
             return false;
         }
     }
@@ -80,7 +108,7 @@ class OfflineCache {
     updateVersionIndex(newVersion, timestamp) {
         try {
             let index = this.getVersionIndex();
-            
+
             // 检查是否已存在该版本
             const existingIndex = index.versions.findIndex(v => v.version === newVersion);
             if (existingIndex !== -1) {
@@ -104,7 +132,7 @@ class OfflineCache {
                             fs.unlinkSync(filePath);
                         }
                     } catch (e) {
-                        console.warn(`[OfflineCache] Failed to remove old version ${v.version}:`, e);
+                        console.warn(`[OfflineCache] Failed to remove old version ${v.version}:`, describeError(e));
                     }
                 });
             }
@@ -112,7 +140,7 @@ class OfflineCache {
             index.lastUpdated = timestamp;
             fs.writeFileSync(this.getVersionIndexPath(), JSON.stringify(index, null, 2), 'utf-8');
         } catch (error) {
-            console.error('[OfflineCache] Failed to update version index:', error);
+            console.error('[OfflineCache] Failed to update version index:', describeError(error));
         }
     }
 
@@ -127,7 +155,7 @@ class OfflineCache {
                 return JSON.parse(data);
             }
         } catch (error) {
-            console.error('[OfflineCache] Failed to read version index:', error);
+            console.error('[OfflineCache] Failed to read version index:', describeError(error));
         }
         return { versions: [], lastUpdated: null };
     }
@@ -139,7 +167,7 @@ class OfflineCache {
     loadFromCache(version = null) {
         try {
             let filePath;
-            
+
             if (version !== null) {
                 filePath = this.getCacheFilePath(version);
             } else {
@@ -149,11 +177,11 @@ class OfflineCache {
             if (fs.existsSync(filePath)) {
                 const data = fs.readFileSync(filePath, 'utf-8');
                 const cacheData = JSON.parse(data);
-                console.log(`[OfflineCache] Loaded schedule from cache: version ${cacheData.version}`);
+                console.log('[OfflineCache] Loaded schedule from cache');
                 return cacheData;
             }
         } catch (error) {
-            console.error('[OfflineCache] Failed to load cache:', error);
+            console.error('[OfflineCache] Failed to load cache:', describeError(error));
         }
         return null;
     }
@@ -187,7 +215,7 @@ class OfflineCache {
             console.log('[OfflineCache] Cache cleared');
             return true;
         } catch (error) {
-            console.error('[OfflineCache] Failed to clear cache:', error);
+            console.error('[OfflineCache] Failed to clear cache:', describeError(error));
             return false;
         }
     }
@@ -198,7 +226,7 @@ class OfflineCache {
     setOfflineStatus(isOffline) {
         const wasOffline = this.isOffline;
         this.isOffline = isOffline;
-        
+
         if (!isOffline) {
             this.lastOnlineTime = Date.now();
         }
@@ -227,7 +255,7 @@ class OfflineCache {
      */
     startNetworkMonitoring(checkNetworkFn, intervalMs = 30000, onStatusChange = null) {
         this.onStatusChange = onStatusChange;
-        
+
         if (this.networkCheckInterval) {
             clearInterval(this.networkCheckInterval);
         }
@@ -236,7 +264,8 @@ class OfflineCache {
             try {
                 const isConnected = await checkNetworkFn();
                 this.setOfflineStatus(!isConnected);
-            } catch (error) {
+            } catch {
+                // 网络检查失败本身就说明当前不可用，直接标记为离线，无需记录具体异常
                 this.setOfflineStatus(true);
             }
         }, intervalMs);
@@ -276,6 +305,8 @@ class OfflineCache {
                 lastUpdated: index.lastUpdated
             };
         } catch (error) {
+            // 统计信息仅为展示用途，读取失败不应影响主流程；只记录错误类型，避免泄漏缓存路径等敏感信息
+            console.warn('[OfflineCache] Failed to get cache stats:', describeError(error));
             return {
                 versions: 0,
                 totalSize: 0,
